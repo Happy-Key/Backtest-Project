@@ -1,5 +1,5 @@
 __pycache__/
+data/
 *.pyc
 *.pyo
 *.pyd
-__pycache__/utils.cpython-311.pyc
