@@ -21,19 +21,16 @@ def main():
     df = MA_Crossover(df, 3, 10)
     df = df.dropna()
 
-    df['strat_return'] = df.signal*df.log_return
-    df['cum_return'] = (df.strat_return).cumsum()
-    df['market_cum_return'] = df.log_return.cumsum()
-    #df['strat_equity'] = np.exp(df.cum_return)
-    #df['market_equity'] = np.exp(df.log_return.cumsum())
+    df = analyze_results(df)
 
-    #graph_curves(df, 'cum_return', 'market_cum_return')
+    #graph_log_return(df)
+    graph_equity(df)
     
-    print(df.tail(1))
     ann_actions = 52
     print(f'Strategy ann-return: {df.strat_return.mean()*ann_actions}')
     print(f'Strategy ann. sharpe: {np.sqrt(ann_actions)*(df.strat_return).mean()/(df.strat_return).std()}')
     print(f'Optimal leverage: {kelly_leverage(ann_actions*df.strat_return.mean(),ann_actions*df.strat_return.var())}')
+    print(f'Max drawdown: {100*(1-np.exp(df.drawdown.min()))}%')
 
 def fetch_data():
     spec = {
@@ -59,6 +56,16 @@ def format_data(data, datatype):
             data['timestamp'] = pd.to_datetime(data['timestamp'])
     return data
 
+def analyze_results(df):
+    df['strat_return'] = df.signal*df.log_return
+    df['cum_return'] = (df.strat_return).cumsum()
+    df['market_cum_return'] = df.log_return.cumsum()
+    df['peak'] = df.cum_return.cummax()
+    df['drawdown'] = df.cum_return - df.peak
+    df['strat_equity'] = np.exp(df.cum_return)
+    df['market_equity'] = np.exp(df.log_return.cumsum())
+    return df
+
 def train_test_split(data, years=5):
     train = data.loc[data['timestamp'] < data['timestamp'].tail(1).item() - datetime.timedelta(days=365*years)]
     test = data.loc[data['timestamp'] >= data['timestamp'].tail(1).item() - datetime.timedelta(days=365*years)]
@@ -83,7 +90,7 @@ def kelly_leverage(mean, var):
         leverage = 1
     return leverage
 
-def graph_curves(df, strategy_metric, benchmark):
+def graph_log_return(df):
     # --- NOW WE GRAPH WITH PLOTLY ---
 
     # Create a blank figure
@@ -92,7 +99,7 @@ def graph_curves(df, strategy_metric, benchmark):
     # Add the Strategy Equity line
     fig.add_trace(go.Scatter(
         x=df.timestamp, 
-        y=df[strategy_metric], 
+        y=df['cum_return'], 
         mode='lines', 
         name='Strategy',
         line=dict(color='limegreen', width=2)
@@ -101,7 +108,7 @@ def graph_curves(df, strategy_metric, benchmark):
     # Add the Buy & Hold (Market) Equity line for comparison
     fig.add_trace(go.Scatter(
         x=df.timestamp, 
-        y=df[benchmark], 
+        y=df['market_cum_return'], 
         mode='lines', 
         name='Buy & Hold (Benchmark)',
         line=dict(color='gray', width=1.5, dash='dash')
@@ -111,7 +118,50 @@ def graph_curves(df, strategy_metric, benchmark):
     fig.update_layout(
         title='Strategy Performance vs. Buy & Hold',
         xaxis_title='Date',
-        yaxis_title=strategy_metric,
+        yaxis_title='Log returns',
+        hovermode='x unified', # Shows values for both lines when hovering
+        template='plotly_dark' # Dark mode makes financial charts easier to read
+    )
+
+    # Open the chart in your default web browser
+    fig.show()
+
+def graph_equity(df):
+    fig = go.Figure()
+
+    # Add the Strategy Equity line
+    fig.add_trace(go.Scatter(
+        x=df.timestamp, 
+        y=df['strat_equity'], 
+        mode='lines', 
+        name='Strategy',
+        line=dict(color='limegreen', width=2)
+    ))
+
+    fig.add_trace(go.Scatter(
+        x=df.timestamp, 
+        y=np.exp(df['peak']), 
+        mode='lines', 
+        name='High-Water Mark',
+        line=dict(color='red', width=2),
+        fill='tonexty',
+        fillcolor='rgba(255, 0, 0, 0.2)'
+    ))
+
+    # Add the Buy & Hold (Market) Equity line for comparison
+    fig.add_trace(go.Scatter(
+        x=df.timestamp, 
+        y=df['market_equity'], 
+        mode='lines', 
+        name='Buy & Hold (Benchmark)',
+        line=dict(color='gray', width=1.5, dash='dash')
+    ))
+
+    # Customize the layout (labels, titles, interactive sliders)
+    fig.update_layout(
+        title='Strategy Performance vs. Buy & Hold',
+        xaxis_title='Date',
+        yaxis_title='Equity ($)',
         hovermode='x unified', # Shows values for both lines when hovering
         template='plotly_dark' # Dark mode makes financial charts easier to read
     )
