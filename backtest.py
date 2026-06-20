@@ -3,6 +3,7 @@ import yfinance as yf
 import numpy as np
 import plotly.graph_objects as go
 from utils import get_market_data, read_parquet
+import strategies
 import datetime
 
 benchmark_rate = 0.0362
@@ -18,7 +19,7 @@ def main():
     (train, test) = train_test_split(data)
     data = train
     df = add_log_return(data)
-    df = MA_Crossover(df, 3, 10)
+    df = strategies.MA_Crossover(df, 3, 10)
     df = df.dropna()
 
     df = analyze_results(df)
@@ -28,7 +29,7 @@ def main():
     
     ann_actions = 52
     print(f'Strategy ann-return: {df.strat_return.mean()*ann_actions}')
-    print(f'Strategy ann. sharpe: {np.sqrt(ann_actions)*(df.strat_return).mean()/(df.strat_return).std()}')
+    print(f'Strategy ann. sharpe: {ann_sharpe(df.strat_return, ann_actions)}')
     print(f'Optimal leverage: {kelly_leverage(ann_actions*df.strat_return.mean(),ann_actions*df.strat_return.var())}')
     print(f'Max drawdown: {100*(1-np.exp(df.drawdown.min()))}%')
 
@@ -39,14 +40,6 @@ def fetch_data():
         "series": "WEEKLY_ADJUSTED"
     }
     return get_market_data(spec, request=True)
-
-def MA_Crossover(df, short_window, long_window):
-    df['Short_MA'] = df['close'].rolling(window=short_window).mean()
-    df['Long_MA'] = df['close'].rolling(window=long_window).mean()
-    df['signal'] = np.sign(df['Short_MA']-df['Long_MA'])
-    df['signal'] = df.signal.shift(1)
-    df['signal'] = (df.signal+1)/2
-    return df
 
 def format_data(data, datatype):
     match datatype:
@@ -89,6 +82,9 @@ def kelly_leverage(mean, var):
     else:
         leverage = 1
     return leverage
+
+def ann_sharpe(returns, annual_actions):
+    return np.sqrt(annual_actions)*(returns).mean()/(returns).std()
 
 def graph_log_return(df):
     # --- NOW WE GRAPH WITH PLOTLY ---
