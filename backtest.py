@@ -3,11 +3,20 @@ import yfinance as yf
 import numpy as np
 import plotly.graph_objects as go
 from utils import get_market_data, read_parquet
+import datetime
+
+benchmark_rate = 0.0362
+ann_borrow_premium = 0.015
+ann_interest_premium = 0.015
+ann_borrow_rate = benchmark_rate + ann_borrow_premium
+ann_interest_rate = benchmark_rate - ann_interest_premium
 
 def main():
     print("Tools loaded successfully! Fetching data...")
     data = fetch_data()
     data = format_data(data, "av")
+    (train, test) = train_test_split(data)
+    data = train
     df = add_log_return(data)
     df = MA_Crossover(df, 3, 10)
     df = df.dropna()
@@ -15,23 +24,24 @@ def main():
     df['strat_return'] = df.signal*df.log_return
     df['cum_return'] = (df.strat_return).cumsum()
     df['market_cum_return'] = df.log_return.cumsum()
-    df['strat_equity'] = np.exp(df.cum_return)
-    df['market_equity'] = np.exp(df.log_return.cumsum())
+    #df['strat_equity'] = np.exp(df.cum_return)
+    #df['market_equity'] = np.exp(df.log_return.cumsum())
 
-    graph_curves(df, 'cum_return', 'market_cum_return')
-
-    print(f'Strategy log-return: {sum(df.strat_return)}')
-    print(f'Strategy ann. sharpe: {np.sqrt(52)*(df.strat_return).mean()/(df.strat_return).std()}')
-    print(f'Market log-return: {sum(df.log_return)}')
-    print(f'Market ann. sharpe: {np.sqrt(52)*(df.log_return).mean()/(df.log_return).std()}')
+    #graph_curves(df, 'cum_return', 'market_cum_return')
+    
+    print(df.tail(1))
+    ann_actions = 52
+    print(f'Strategy ann-return: {df.strat_return.mean()*ann_actions}')
+    print(f'Strategy ann. sharpe: {np.sqrt(ann_actions)*(df.strat_return).mean()/(df.strat_return).std()}')
+    print(f'Optimal leverage: {kelly_leverage(ann_actions*df.strat_return.mean(),ann_actions*df.strat_return.var())}')
 
 def fetch_data():
     spec = {
         "source": "alphavantage",
-        "ticker": "AAPL",
+        "ticker": "NOG",
         "series": "WEEKLY_ADJUSTED"
     }
-    return get_market_data(spec)
+    return get_market_data(spec, request=True)
 
 def MA_Crossover(df, short_window, long_window):
     df['Short_MA'] = df['close'].rolling(window=short_window).mean()
@@ -46,15 +56,32 @@ def format_data(data, datatype):
         case "av":
             data['close'] = data['adjusted close']
             data = data.drop(columns=['open', 'high', 'low', 'adjusted close', 'volume', 'dividend amount'])
+            data['timestamp'] = pd.to_datetime(data['timestamp'])
     return data
+
+def train_test_split(data, years=5):
+    train = data.loc[data['timestamp'] < data['timestamp'].tail(1).item() - datetime.timedelta(days=365*years)]
+    test = data.loc[data['timestamp'] >= data['timestamp'].tail(1).item() - datetime.timedelta(days=365*years)]
+    return (train, test)
 
 def add_log_return(df, num_returns=1):
     df['prev_close'] = df['close'].shift(1)
     df['log_return'] = np.log(df.close/df.prev_close)
-    if (num_returns > 1):
-        for i in range(num_returns):
+    if num_returns > 1:
+        for i in range(1, num_returns):
             df['log_return_lag' + str(i)] = df.log_return.shift(i)
     return df
+
+def kelly_leverage(mean, var):
+    deposit_leverage = (mean - np.log(1+ann_interest_rate)) / var
+    borrow_leverage = (mean - np.log(1+ann_borrow_rate)) / var
+    if borrow_leverage > 1:
+        leverage = borrow_leverage
+    elif deposit_leverage < 1:
+        leverage = deposit_leverage
+    else:
+        leverage = 1
+    return leverage
 
 def graph_curves(df, strategy_metric, benchmark):
     # --- NOW WE GRAPH WITH PLOTLY ---
@@ -84,7 +111,7 @@ def graph_curves(df, strategy_metric, benchmark):
     fig.update_layout(
         title='Strategy Performance vs. Buy & Hold',
         xaxis_title='Date',
-        yaxis_title='Portfolio Value ($)',
+        yaxis_title=strategy_metric,
         hovermode='x unified', # Shows values for both lines when hovering
         template='plotly_dark' # Dark mode makes financial charts easier to read
     )
