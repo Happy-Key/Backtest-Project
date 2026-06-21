@@ -33,7 +33,7 @@ def get_market_data(s, request=False, getFresh=False):
         print(f"[{s['ticker']}] Cache miss. Fetching from {s['source']}...")
         match s["source"]:
             case "yfinance":
-                df = yf.download(s["ticker"], start=s["start_date"], end=s["end_date"])
+                df = yf.download(s["ticker"], start=s["start_date"], end=s["end_date"], auto_adjust=False)
             case "alphavantage":
                 df = fetch_av_data(s)
             case _:
@@ -56,7 +56,7 @@ def fetch_av_data(spec):
 def file_name_by_spec(s):
     match s["source"]:
         case "yfinance":
-            protoname = f"{s['source']}_{s['ticker']}_{s['start_date']}_{s['end_date']}_"
+            protoname = f"{s['source']}_{s['ticker']}_{s['start_date']}_"
         case "alphavantage":
             protoname = f"{s['source']}_{s['ticker']}_{s['series']}_"
         case _:

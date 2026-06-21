@@ -15,12 +15,13 @@ ann_borrow_rate = benchmark_rate + ann_borrow_premium
 ann_interest_rate = benchmark_rate - ann_interest_premium
 
 #specifics
-ticker_name = 'AAPL'
+ticker_name = 'SPY'
 strategy_name = 'Simple MA'
+source_name = 'alphavantage'
 
 def main():
     data = fetch_data()
-    data = format_data(data, "av")
+    data = format_data(data, source_name)
     (train, test) = train_test_split(data)
     data = train
 
@@ -52,12 +53,22 @@ def analyze_results(df):
     return df
 
 def format_data(data, datatype):
+    print(data.head(4))
     match datatype:
-        case "av":
+        case "alphavantage":
             data['unadjusted_close'] = data['close']
             data['close'] = data['adjusted close']
             data = data.drop(columns=['open', 'high', 'low', 'adjusted close', 'volume', 'dividend amount'])
             data['timestamp'] = pd.to_datetime(data['timestamp'])
+        case "yfinance":
+            data = data.reset_index()
+            data.columns = data.columns.droplevel(1) 
+            data.index.name = ''
+            print(data.head(4))
+
+            data['close'] = data['Close']
+            data['timestamp'] = data['Date']
+            data = data.drop(columns=['Open', 'High', 'Low', 'Close', 'Volume', 'Date'])
     return data
 
 def add_fees(df, absoluteFee):
@@ -95,9 +106,11 @@ def ann_sharpe(returns, annual_actions):
 
 def fetch_data():
     spec = {
-        "source": "alphavantage",
+        "source": source_name,
         "ticker": ticker_name,
-        "series": "WEEKLY_ADJUSTED"
+        "series": "WEEKLY_ADJUSTED",
+        "start_date": "1999-01-01",
+        "end_date": datetime.date.today()
     }
     return get_market_data(spec, request=True)
 
@@ -174,3 +187,4 @@ def graph_equity(df, fig):
 
 #execution order shenanigans
 main()
+#read_parquet("yfinance_SPY_1999-01-01_2026-06-20_2026-06-20")
