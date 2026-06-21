@@ -6,6 +6,7 @@ from utils import get_market_data, read_parquet
 import strategies
 import datetime
 
+#constants
 fixed_fee_rate = 0.005
 benchmark_rate = 0.0362
 ann_borrow_premium = 0.015
@@ -13,12 +14,16 @@ ann_interest_premium = 0.015
 ann_borrow_rate = benchmark_rate + ann_borrow_premium
 ann_interest_rate = benchmark_rate - ann_interest_premium
 
+#specifics
+ticker_name = 'AAPL'
+strategy_name = 'Simple MA'
+
 def main():
-    print("Tools loaded successfully! Fetching data...")
     data = fetch_data()
     data = format_data(data, "av")
     (train, test) = train_test_split(data)
     data = train
+
     df = add_log_return(data)
     df = strategies.MA_Crossover(df, 3, 10)
     df['signal'] = df.signal.shift(1)
@@ -27,8 +32,7 @@ def main():
 
     df = analyze_results(df)
 
-    graph_log_return(df)
-    #graph_equity(df)
+    graph_results(df, 'log-return', f'[{ticker_name}] {strategy_name} vs. Buy and Hold')
     
     ann_actions = 52
     print(f'Strategy ann-return: {df.strat_return.mean()*ann_actions}')
@@ -37,13 +41,15 @@ def main():
     print(f'Max drawdown: {100*(1-np.exp(df.drawdown.min()))}%')
     print(f'Ann. return lost to fees: {df.fee.mean()*ann_actions}')
 
-def fetch_data():
-    spec = {
-        "source": "alphavantage",
-        "ticker": "NVDA",
-        "series": "WEEKLY_ADJUSTED"
-    }
-    return get_market_data(spec, request=True)
+def analyze_results(df):
+    df['strat_return'] = df.signal*df.log_return + df.fee
+    df['cum_return'] = (df.strat_return).cumsum()
+    df['market_cum_return'] = df.log_return.cumsum()
+    df['peak'] = df.cum_return.cummax()
+    df['drawdown'] = df.cum_return - df.peak
+    df['strat_equity'] = np.exp(df.cum_return)
+    df['market_equity'] = np.exp(df.log_return.cumsum())
+    return df
 
 def format_data(data, datatype):
     match datatype:
@@ -53,16 +59,6 @@ def format_data(data, datatype):
             data = data.drop(columns=['open', 'high', 'low', 'adjusted close', 'volume', 'dividend amount'])
             data['timestamp'] = pd.to_datetime(data['timestamp'])
     return data
-
-def analyze_results(df):
-    df['strat_return'] = df.signal*df.log_return #+ df.fee
-    df['cum_return'] = (df.strat_return).cumsum()
-    df['market_cum_return'] = df.log_return.cumsum()
-    df['peak'] = df.cum_return.cummax()
-    df['drawdown'] = df.cum_return - df.peak
-    df['strat_equity'] = np.exp(df.cum_return)
-    df['market_equity'] = np.exp(df.log_return.cumsum())
-    return df
 
 def add_fees(df, absoluteFee):
     df['feeLogReturn'] = np.log((df['unadjusted_close']-absoluteFee) / df['unadjusted_close']) 
@@ -97,13 +93,35 @@ def kelly_leverage(mean, var):
 def ann_sharpe(returns, annual_actions):
     return np.sqrt(annual_actions)*(returns).mean()/(returns).std()
 
-def graph_log_return(df):
-    # --- NOW WE GRAPH WITH PLOTLY ---
+def fetch_data():
+    spec = {
+        "source": "alphavantage",
+        "ticker": ticker_name,
+        "series": "WEEKLY_ADJUSTED"
+    }
+    return get_market_data(spec, request=True)
 
-    # Create a blank figure
+def graph_results(df, graph_type, name):
     fig = go.Figure()
 
-    # Add the Strategy Equity line
+    match graph_type:
+        case 'log-return':
+            graph_log_return(df, fig)
+        case 'equity':
+            graph_equity(df, fig)
+        case _:
+            raise RuntimeError("Invalid Graph Type")
+    
+    fig.update_layout(
+        title=name,
+        xaxis_title='Date',
+        hovermode='x unified', # Shows values for both lines when hovering
+        template='plotly_dark'
+    )
+
+    fig.show()
+
+def graph_log_return(df, fig):
     fig.add_trace(go.Scatter(
         x=df.timestamp, 
         y=df['cum_return'], 
@@ -111,8 +129,6 @@ def graph_log_return(df):
         name='Strategy',
         line=dict(color='limegreen', width=2)
     ))
-
-    # Add the Buy & Hold (Market) Equity line for comparison
     fig.add_trace(go.Scatter(
         x=df.timestamp, 
         y=df['market_cum_return'], 
@@ -120,23 +136,11 @@ def graph_log_return(df):
         name='Buy & Hold (Benchmark)',
         line=dict(color='gray', width=1.5, dash='dash')
     ))
-
-    # Customize the layout (labels, titles, interactive sliders)
     fig.update_layout(
-        title='Strategy Performance vs. Buy & Hold',
-        xaxis_title='Date',
-        yaxis_title='Log returns',
-        hovermode='x unified', # Shows values for both lines when hovering
-        template='plotly_dark' # Dark mode makes financial charts easier to read
+        yaxis_title='Log return',
     )
 
-    # Open the chart in your default web browser
-    fig.show()
-
-def graph_equity(df):
-    fig = go.Figure()
-
-    # Add the Strategy Equity line
+def graph_equity(df, fig):
     fig.add_trace(go.Scatter(
         x=df.timestamp, 
         y=df['strat_equity'], 
@@ -164,17 +168,9 @@ def graph_equity(df):
         line=dict(color='gray', width=1.5, dash='dash')
     ))
 
-    # Customize the layout (labels, titles, interactive sliders)
     fig.update_layout(
-        title='Strategy Performance vs. Buy & Hold',
-        xaxis_title='Date',
         yaxis_title='Equity ($)',
-        hovermode='x unified', # Shows values for both lines when hovering
-        template='plotly_dark' # Dark mode makes financial charts easier to read
     )
-
-    # Open the chart in your default web browser
-    fig.show()
 
 #execution order shenanigans
 main()
