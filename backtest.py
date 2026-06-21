@@ -6,6 +6,7 @@ from utils import get_market_data, read_parquet
 import strategies
 import datetime
 
+fixed_fee_rate = 0.005
 benchmark_rate = 0.0362
 ann_borrow_premium = 0.015
 ann_interest_premium = 0.015
@@ -20,23 +21,25 @@ def main():
     data = train
     df = add_log_return(data)
     df = strategies.MA_Crossover(df, 3, 10)
+    df = add_fees(df, fixed_fee_rate)
     df = df.dropna()
 
     df = analyze_results(df)
 
-    #graph_log_return(df)
-    graph_equity(df)
+    graph_log_return(df)
+    #graph_equity(df)
     
     ann_actions = 52
     print(f'Strategy ann-return: {df.strat_return.mean()*ann_actions}')
     print(f'Strategy ann. sharpe: {ann_sharpe(df.strat_return, ann_actions)}')
     print(f'Optimal leverage: {kelly_leverage(ann_actions*df.strat_return.mean(),ann_actions*df.strat_return.var())}')
     print(f'Max drawdown: {100*(1-np.exp(df.drawdown.min()))}%')
+    print(f'Ann. return lost to fees: {df.fee.mean()*ann_actions}')
 
 def fetch_data():
     spec = {
         "source": "alphavantage",
-        "ticker": "NOG",
+        "ticker": "NVDA",
         "series": "WEEKLY_ADJUSTED"
     }
     return get_market_data(spec, request=True)
@@ -44,19 +47,26 @@ def fetch_data():
 def format_data(data, datatype):
     match datatype:
         case "av":
+            data['unadjusted_close'] = data['close']
             data['close'] = data['adjusted close']
             data = data.drop(columns=['open', 'high', 'low', 'adjusted close', 'volume', 'dividend amount'])
             data['timestamp'] = pd.to_datetime(data['timestamp'])
     return data
 
 def analyze_results(df):
-    df['strat_return'] = df.signal*df.log_return
+    df['strat_return'] = df.signal*df.log_return #+ df.fee
     df['cum_return'] = (df.strat_return).cumsum()
     df['market_cum_return'] = df.log_return.cumsum()
     df['peak'] = df.cum_return.cummax()
     df['drawdown'] = df.cum_return - df.peak
     df['strat_equity'] = np.exp(df.cum_return)
     df['market_equity'] = np.exp(df.log_return.cumsum())
+    return df
+
+def add_fees(df, absoluteFee):
+    df['feeLogReturn'] = np.log((df['unadjusted_close']-absoluteFee) / df['unadjusted_close']) 
+    df['fee'] = df.signal.diff().fillna(0).abs() * df.feeLogReturn
+    df = df.drop(columns=['feeLogReturn'])
     return df
 
 def train_test_split(data, years=5):
