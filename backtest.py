@@ -21,6 +21,7 @@ def main():
     data = train
     df = add_log_return(data)
     df = strategies.MA_Crossover(df, 3, 10)
+    df['signal'] = df.signal.shift(1)
     df = add_fees(df, fixed_fee_rate)
     df = df.dropna()
 
