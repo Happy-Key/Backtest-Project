@@ -11,5 +11,5 @@ def MA_Crossover(df, short_window, long_window):
 def Bollinger_Band(df, window, width):
     df['MA'] = df['close'].rolling(window).mean()
     df['MSD'] = df['close'].rolling(window).std()
-    df['signal'] = np.select([df.close > df.MA + width*df.MSD, df.close < df.MA - width*df.MSD],[1,-1],0)
+    df['signal'] = np.select([df.close > df.MA + width*df.MSD, df.close < df.MA - width*df.MSD],[-1,1],0)
     return df
