@@ -2,7 +2,7 @@ import pandas as pd
 import yfinance as yf
 import numpy as np
 import plotly.graph_objects as go
-from utils import get_market_data, read_parquet
+from utils import get_market_data, read_parquet, format_data
 import strategies
 import datetime
 
@@ -16,31 +16,35 @@ ann_interest_rate = benchmark_rate - ann_interest_premium
 
 #specifics
 ticker_name = 'SPY'
-strategy_name = 'Simple MA'
-source_name = 'alphavantage'
+strategy_name = 'MA Crossover'
+ann_actions = 252
+source_name = 'twelvedata'
 
 def main():
     data = fetch_data()
-    data = format_data(data, source_name)
     (train, test) = train_test_split(data)
     data = train
-
+    
     df = add_log_return(data)
-    df = strategies.MA_Crossover(df, 3, 10)
+    match strategy_name:
+        case 'MA Crossover':
+            df = strategies.MA_Crossover(df, 20, 100)
+        case 'BBand':
+            df = strategies.Bollinger_Band(df, 10, 1)
+    
     df['signal'] = df.signal.shift(1)
     df = add_fees(df, fixed_fee_rate)
     df = df.dropna()
-
     df = analyze_results(df)
-
-    graph_results(df, 'log-return', f'[{ticker_name}] {strategy_name} vs. Buy and Hold')
     
-    ann_actions = 52
     print(f'Strategy ann-return: {df.strat_return.mean()*ann_actions}')
     print(f'Strategy ann. sharpe: {ann_sharpe(df.strat_return, ann_actions)}')
     print(f'Optimal leverage: {kelly_leverage(ann_actions*df.strat_return.mean(),ann_actions*df.strat_return.var())}')
     print(f'Max drawdown: {100*(1-np.exp(df.drawdown.min()))}%')
     print(f'Ann. return lost to fees: {df.fee.mean()*ann_actions}')
+
+    if input('Graph Data? (y/n)') == 'y':
+        graph_results(df, 'log-return', f'[{ticker_name}] {strategy_name} vs. Buy and Hold')
 
 def analyze_results(df):
     df['strat_return'] = df.signal*df.log_return + df.fee
@@ -51,25 +55,6 @@ def analyze_results(df):
     df['strat_equity'] = np.exp(df.cum_return)
     df['market_equity'] = np.exp(df.log_return.cumsum())
     return df
-
-def format_data(data, datatype):
-    print(data.head(4))
-    match datatype:
-        case "alphavantage":
-            data['unadjusted_close'] = data['close']
-            data['close'] = data['adjusted close']
-            data = data.drop(columns=['open', 'high', 'low', 'adjusted close', 'volume', 'dividend amount'])
-            data['timestamp'] = pd.to_datetime(data['timestamp'])
-        case "yfinance":
-            data = data.reset_index()
-            data.columns = data.columns.droplevel(1) 
-            data.index.name = ''
-            print(data.head(4))
-
-            data['close'] = data['Close']
-            data['timestamp'] = data['Date']
-            data = data.drop(columns=['Open', 'High', 'Low', 'Close', 'Volume', 'Date'])
-    return data
 
 def add_fees(df, absoluteFee):
     df['feeLogReturn'] = np.log((df['unadjusted_close']-absoluteFee) / df['unadjusted_close']) 
@@ -109,10 +94,10 @@ def fetch_data():
         "source": source_name,
         "ticker": ticker_name,
         "series": "WEEKLY_ADJUSTED",
-        "start_date": "1999-01-01",
+        "start_date": "2000-01-01",
         "end_date": datetime.date.today()
     }
-    return get_market_data(spec, request=True)
+    return format_data(get_market_data(spec), source_name)
 
 def graph_results(df, graph_type, name):
     fig = go.Figure()
