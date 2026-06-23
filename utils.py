@@ -18,7 +18,7 @@ def get_market_data(s, getFresh=False):
     data_dir = Path("./data")
     
     protoname = file_name_by_spec(s)
-    filename = "data/" + protoname + f"{datetime.date.today()}.parquet"
+    filename = "data/" + protoname + f"_{datetime.date.today()}.parquet"
 
     files = data_dir.glob(protoname + "*.parquet")
     filelist = []
@@ -92,13 +92,14 @@ def fetch_td_data(spec):
     return df
 
 def file_name_by_spec(s):
-    match s["source"]:
+    os.makedirs("data/"+s['source'], exist_ok=True)
+    match s['source']:
         case "yfinance":
-            protoname = f"{s['source']}_{s['ticker']}_{s['start_date']}_"
+            protoname = f"{s['source']}/{s['ticker']}_{s['start_date']}"
         case "alphavantage":
-            protoname = f"{s['source']}_{s['ticker']}_{s['series']}_"
+            protoname = f"{s['source']}/{s['ticker']}_{s['series']}"
         case "twelvedata":
-            protoname = f"{s['source']}_{s['ticker']}_"
+            protoname = f"{s['source']}/{s['ticker']}"
         case _:
             raise RuntimeError("Unknown source")
     return protoname
