@@ -94,6 +94,7 @@ def fetch_data():
         "source": source_name,
         "ticker": ticker_name,
         "series": "WEEKLY_ADJUSTED",
+        "datatype": "csv",
         "start_date": "2000-01-01",
         "end_date": datetime.date.today()
     }

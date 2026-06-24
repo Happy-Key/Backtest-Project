@@ -7,14 +7,62 @@ import sys
 from pathlib import Path
 from twelvedata import TDClient
 import datetime
+import time
 
 AV_API_KEY = "[REDACTED_API_KEY]"
 TD_API_KEY = "[REDACTED_API_KEY]"
 
-def get_market_data(s, getFresh=False):
-    """Fetches data from Yahoo Finance or loads it from a local Parquet cache."""
-    # Ensure the data directory exists
-    os.makedirs("data", exist_ok=True)
+def get_market_data(s, getFresh=False, confirmation=True):
+    search_result = search_data(s, getFresh)
+    if (not isinstance(search_result, str)):
+        return search_result
+    filename = search_result
+    if confirmation:
+        if input('Data not found in cache. Request data? (y/n)') != 'y':
+            raise RuntimeError('Data unavailable')
+    print(f"[{s['ticker']}] Cache miss. Fetching from {s['source']}...")
+    match s["source"]:
+        case "yfinance":
+            df = yf.download(s['ticker'], start=s['start_date'], end=s['end_date'], auto_adjust=True, group_by='ticker')
+        case "alphavantage":
+            df = request_av_data(s)
+        case "twelvedata":
+            df = request_td_data(s)
+        case _:
+            raise RuntimeError('Unknown source')
+    if df.empty:
+        raise RuntimeError('Fetch failure')
+    df.to_parquet(filename)
+    if confirmation:
+        if input('Continue with program? (y/n)') != 'y':
+            sys.exit(0)
+    return df
+    
+def summon_universe(list_path):
+    with open(list_path, "r", encoding="utf-8") as file:
+        ticker_list = str.split(file.read(),',')
+    tickers_more = 1
+    for ticker in ticker_list:
+        tickers_more -= 1
+        spec = {
+            "source": "alphavantage",
+            "ticker": ticker,
+            "series": "EARNINGS",
+            "datatype": "json"
+        }
+        get_market_data(spec, confirmation=False)
+        spec = {
+            "source": "twelvedata",
+            "ticker": ticker,
+        }
+        get_market_data(spec, confirmation=False)
+        if tickers_more <= 0:
+            tickers_more = int(input("how many more?"))
+            if tickers_more <= 0: break
+        time.sleep(10)
+        
+
+def search_data(s, getFresh):
     data_dir = Path("./data")
     
     protoname = file_name_by_spec(s)
@@ -33,24 +81,7 @@ def get_market_data(s, getFresh=False):
         print(f"[{s['ticker']}] Loading STALE data...")
         return pd.read_parquet(str(filelist[-1]))
     else:
-        if input('Data not found in cache. Request data? (y/n)') != 'y':
-            raise RuntimeError('Data unavailable')
-        print(f"[{s['ticker']}] Cache miss. Fetching from {s['source']}...")
-        match s["source"]:
-            case "yfinance":
-                df = yf.download(s['ticker'], start=s['start_date'], end=s['end_date'], auto_adjust=True, group_by='ticker')
-            case "alphavantage":
-                df = fetch_av_data(s)
-            case "twelvedata":
-                df = fetch_td_data(s)
-            case _:
-                raise RuntimeError('Unknown source')
-        if df.empty:
-            raise RuntimeError('Fetch failure')
-        df.to_parquet(filename)
-        if input('Continue with program? (y/n)') != 'y':
-            sys.exit(0)
-        return df
+        return filename
     
 def format_data(data, datatype):
     match datatype:
@@ -61,27 +92,44 @@ def format_data(data, datatype):
             data['timestamp'] = pd.to_datetime(data['timestamp'])
         case "yfinance":
             data = data.reset_index()
-            data.columns = data.columns.droplevel(1) 
+            data.columns = data.columns.droplevel(1)
             data.index.name = ''
             data['close'] = data['Close']
             data['timestamp'] = data['Date']
             data = data.drop(columns=['Open', 'High', 'Low', 'Close', 'Volume', 'Date'])
         case "twelvedata":
-            data = data.iloc[::-1]
             data['unadjusted_close'] = data['close']
-            data = data.reset_index()
             data['timestamp'] = pd.to_datetime(data['datetime'])
             data = data.drop(columns=['volume', 'datetime'])
     return data
 
-def fetch_av_data(spec):
-    url = f"https://www.alphavantage.co/query?function=TIME_SERIES_{spec['series']}&symbol={spec['ticker']}&apikey={AV_API_KEY}&datatype=csv"
+def request_av_data(spec):
+    time_series_data = ["DAILY", "DAILY_ADJUSTED", "WEEKLY", "WEEKLY_ADJUSTED"]
+    url = ["https://www.alphavantage.co/query?function=",
+           "TIME_SERIES_" if spec['series'] in time_series_data else "",
+           spec['series'],
+           "&symbol=",
+           spec['ticker'],
+           "&apikey=",
+           AV_API_KEY,
+           "&datatype=csv" if spec['datatype'] == "csv" else "",
+           ]
+    url = "".join(url)
     response = requests.get(url)
-    df = pd.read_csv(io.StringIO(response.text))
+    match spec['datatype']:
+        case "csv":
+            df = pd.read_csv(io.StringIO(response.text))
+        case "json":
+            data = response.json()
+            if ('quarterlyEarnings' not in data.keys()):
+                print(data)
+                raise RuntimeError("freak")
+            df = pd.DataFrame(data["quarterlyEarnings"])
+    
     df = df.iloc[::-1].reset_index(drop=True)
     return df
 
-def fetch_td_data(spec):
+def request_td_data(spec):
     td = TDClient(apikey=TD_API_KEY)
     ts = td.time_series(
         symbol=spec['ticker'],
@@ -89,6 +137,7 @@ def fetch_td_data(spec):
         interval="1day",
     )
     df = ts.as_pandas()
+    df = df.iloc[::-1].reset_index()
     return df
 
 def file_name_by_spec(s):
@@ -107,6 +156,7 @@ def file_name_by_spec(s):
 def read_parquet(path):
     os.makedirs("temp", exist_ok=True)
     df = pd.read_parquet("data/" + path + ".parquet")
-    df.to_csv("temp/" + path + ".csv")
+    df.to_csv("temp/" + str.split(path,"/")[-1] + ".csv")
 
-#read_parquet("twelvedata_SPY_2026-06-22")
+#read_parquet("alphavantage/META_EARNINGS_2026-06-23")
+summon_universe("lists/tickers_S&P600.txt")

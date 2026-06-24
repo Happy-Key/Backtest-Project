@@ -1,6 +1,7 @@
 __pycache__/
 data/
 temp/
+lists/
 *.pyc
 *.pyo
 *.pyd
