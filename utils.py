@@ -4,13 +4,59 @@ import yfinance as yf
 import requests
 import io
 import sys
+import json
 from pathlib import Path
 from twelvedata import TDClient
 import datetime
 import time
+from sec_cik_mapper import StockMapper
 
 AV_API_KEY = "[REDACTED_API_KEY]"
 TD_API_KEY = "[REDACTED_API_KEY]"
+SEC_USER_AGENT = "[REDACTED_SEC_USER_AGENT]"
+
+def get_sec_company_facts(user_agent, ticker):
+    map = pd.read_parquet('data/cik_map.parquet')
+    cik = map.loc[map['Ticker'] == ticker, 'CIK'].values[0]
+    padded_cik = str(cik).zfill(10)
+    url = f"https://data.sec.gov/api/xbrl/companyfacts/CIK{padded_cik}.json"
+    headers = {
+        'User-Agent': user_agent,
+        'Host': 'data.sec.gov'
+        }
+    response = requests.get(url, headers=headers)
+    if response.status_code != 200:
+        raise Exception(
+            f"SEC API returned status code {response.status_code}. Ensure your User-Agent is valid."
+        )
+    data = response.json()
+    with open(f'data/bronze/SEC/{ticker}_facts.json', 'w') as f:
+        json.dump(data, f)
+    return data
+    
+def sec_facts_to_long(ticker):
+    filename = f'data/bronze/SEC/{ticker}_facts.json'
+    if os.path.exists(filename):
+        with open(filename, 'r') as f:
+            data = json.load(f)
+    else:
+        print(f'[{ticker}] SEC Company Facts not in database.')
+        if (input(f'Fetch [{ticker}] Company Facts? (y/n)') != 'y'): return
+        data = get_sec_company_facts(SEC_USER_AGENT, ticker)
+    all_records = []
+    facts = data.get("facts", {})
+    for tags in facts.values():
+        for tag, tag_data in tags.items():
+            units = tag_data.get("units", {})
+            for unit_rows in units.values():
+                for row in unit_rows:
+                    row["tag"] = tag
+                    row["ticker"] = ticker
+                    all_records.append(row)
+
+    df = pd.DataFrame(all_records)
+    df.to_parquet(f"data/silver/SEC/{ticker}_long.parquet")
+    return df
 
 def get_market_data(s, getFresh=False, confirmation=True):
     search_result = search_data(s, getFresh)
@@ -37,7 +83,7 @@ def get_market_data(s, getFresh=False, confirmation=True):
         if input('Continue with program? (y/n)') != 'y':
             sys.exit(0)
     return df
-    
+
 def summon_universe(list_path):
     with open(list_path, "r", encoding="utf-8") as file:
         ticker_list = str.split(file.read(),',')
@@ -60,7 +106,6 @@ def summon_universe(list_path):
             tickers_more = int(input("how many more?"))
             if tickers_more <= 0: break
         time.sleep(10)
-        
 
 def search_data(s, getFresh):
     data_dir = Path("./data")
@@ -82,7 +127,7 @@ def search_data(s, getFresh):
         return pd.read_parquet(str(filelist[-1]))
     else:
         return filename
-    
+
 def format_data(data, datatype):
     match datatype:
         case "alphavantage":
@@ -152,11 +197,12 @@ def file_name_by_spec(s):
         case _:
             raise RuntimeError("Unknown source")
     return protoname
-    
+
+def download_cik_mapper():
+    mapper = StockMapper()
+    mapper.raw_dataframe.to_parquet('data/cik_map.parquet')
+
 def read_parquet(path):
     os.makedirs("temp", exist_ok=True)
     df = pd.read_parquet("data/" + path + ".parquet")
     df.to_csv("temp/" + str.split(path,"/")[-1] + ".csv")
-
-#read_parquet("alphavantage/META_EARNINGS_2026-06-23")
-summon_universe("lists/tickers_S&P600.txt")
