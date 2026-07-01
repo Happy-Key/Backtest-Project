@@ -16,10 +16,9 @@ def ttm(df):
     df['end'] = pd.to_datetime(df['end'])
     df['duration'] = (df.end - df.start).dt.days
     og = df.copy()
-    suitable_intervals = pd.DataFrame(df[df.duration >= 350])
-    df = df[df.duration < 350]
+    states = df.copy()
 
-    for i in range(3):
+    for i in range(2):
         cross_df = df.merge(og, how='cross')
         df = cross_df[ (cross_df['end_x'] - cross_df['start_y']).dt.days.abs() <= tolerance ]
         df['start'] = pd.to_datetime(df['start_x'])
@@ -28,10 +27,37 @@ def ttm(df):
         df['val'] = df.val_x + df.val_y
         df['filed'] = np.maximum(df.filed_x, df.filed_y)
         df = df[['start','end','val','filed','duration']]
-        suitable_intervals = pd.concat([suitable_intervals, df[df.duration >= 350]], ignore_index=True)
-        df = df[df.duration < 350]
+        #suitable_intervals = pd.concat([suitable_intervals, df[df.duration >= 350]], ignore_index=True)
+        df = df[df.duration < 800]
+        states = pd.concat([states, df])
+    df = states.copy()
+    suitable_intervals = pd.DataFrame(df[(350 <= df.duration) & (df.duration < 400)])
+    df = df[df.duration >= 400]
+    for _ in range(2):
+        cross_df = df.merge(og, how='cross')
+        df = cross_df[ (cross_df['end_x'] - cross_df['end_y']).dt.days.abs() <= tolerance ]
+        df['start'] = pd.to_datetime(np.minimum(df.start_x, df.start_y))
+        df['end'] = pd.to_datetime(np.maximum(df.start_x, df.start_y))
+        df['duration'] = np.abs(df.duration_x - df.duration_y - 1)
+        df['val'] = np.abs(df.val_x - df.val_y)
+        df['filed'] = np.maximum(df.filed_x, df.filed_y)
+        df = df[['start','end','val','filed','duration']]
+        suitable_intervals = pd.concat([suitable_intervals, df[(350 <= df.duration) & (df.duration < 400)]], ignore_index=True)
+        df = df[df.duration >= 400]
+    df = states.copy()
+    for _ in range(2):
+        cross_df = df.merge(og, how='cross')
+        df = cross_df[ (cross_df['start_x'] - cross_df['start_y']).dt.days.abs() <= tolerance ]
+        df['start'] = pd.to_datetime(np.minimum(df.end_x, df.end_y))
+        df['end'] = pd.to_datetime(np.maximum(df.end_x, df.end_y))
+        df['duration'] = np.abs(df.duration_x - df.duration_y - 1)
+        df['val'] = np.abs(df.val_x - df.val_y)
+        df['filed'] = np.maximum(df.filed_x, df.filed_y)
+        df = df[['start','end','val','filed','duration']]
+        suitable_intervals = pd.concat([suitable_intervals, df[(350 <= df.duration) & (df.duration < 400)]], ignore_index=True)
+        df = df[df.duration >= 400]
 
-    suitable_intervals = suitable_intervals[suitable_intervals.duration < 400]
+    #suitable_intervals = suitable_intervals[suitable_intervals.duration < 400]
     suitable_intervals = suitable_intervals.sort_values('end', ascending=False)
     suitable_intervals = suitable_intervals.drop_duplicates(subset='filed')
     suitable_intervals = suitable_intervals.sort_values('filed')
