@@ -1,8 +1,53 @@
 from utils import *
-import time
 
 def execute():
-    facts_to_long_by_list('lists/tickers_S&P600.txt')
+    filename = f'data/silver/SEC/AAPL_long.parquet'
+    if os.path.exists(filename):
+        data = pd.read_parquet(filename)
+    data = data[data.tag == 'NetIncomeLoss']
+    data = data[data.form.isin(['10-K','10-Q','10-K/A','10-Q/A'])].sort_values('filed')
+    ttm(data[['start','end','val','filed']])
+            
+
+def ttm(df):
+    tolerance = 5
+    #start, end, val, filed
+    df['start'] = pd.to_datetime(df['start'])
+    df['end'] = pd.to_datetime(df['end'])
+    df['duration'] = (df.end - df.start).dt.days
+    og = df.copy()
+    suitable_intervals = pd.DataFrame(df[df.duration >= 350])
+    df = df[df.duration < 350]
+
+    for i in range(3):
+        cross_df = df.merge(og, how='cross')
+        df = cross_df[ (cross_df['end_x'] - cross_df['start_y']).dt.days.abs() <= tolerance ]
+        df['start'] = pd.to_datetime(df['start_x'])
+        df['end'] = pd.to_datetime(df['end_y'])
+        df['duration'] = df.duration_x + df.duration_y + 1
+        df['val'] = df.val_x + df.val_y
+        df['filed'] = np.maximum(df.filed_x, df.filed_y)
+        df = df[['start','end','val','filed','duration']]
+        suitable_intervals = pd.concat([suitable_intervals, df[df.duration >= 350]], ignore_index=True)
+        df = df[df.duration < 350]
+
+    suitable_intervals = suitable_intervals[suitable_intervals.duration < 400]
+    suitable_intervals = suitable_intervals.sort_values('end', ascending=False)
+    suitable_intervals = suitable_intervals.drop_duplicates(subset='filed')
+    suitable_intervals = suitable_intervals.sort_values('filed')
+    suitable_intervals['val'] = suitable_intervals.val / suitable_intervals.duration * 365
+    suitable_intervals = suitable_intervals.reset_index()
+    print(suitable_intervals.tail(15))
+
+    trading_dates = pd.date_range(start=suitable_intervals["filed"].min(), end=suitable_intervals["filed"].max(), freq="B")
+    daily_df = pd.DataFrame({"datetime": trading_dates})
+    sparse_ttm = suitable_intervals[["filed", "val"]].rename(columns={"filed": "datetime"})
+    sparse_ttm['datetime'] = pd.to_datetime(sparse_ttm['datetime'])
+    wide_df = pd.merge_asof(daily_df, sparse_ttm, on="datetime", direction="backward")
+    wide_df['val'] = wide_df.val.ffill()
+    #print(wide_df.head(5))
+    #print(wide_df.tail(5))
+    return wide_df
 
 def get_company_facts_from_list(list_path):
     with open(list_path, "r", encoding="utf-8") as file:
