@@ -5,3 +5,5 @@ lists/
 *.pyc
 *.pyo
 *.pyd
+.env
+*.env

@@ -11,10 +11,13 @@ from twelvedata import TDClient
 import datetime
 import time
 from sec_cik_mapper import StockMapper
+import os
+from dotenv import load_dotenv
 
-AV_API_KEY = "[REDACTED_API_KEY]"
-TD_API_KEY = "[REDACTED_API_KEY]"
-SEC_USER_AGENT = "[REDACTED_SEC_USER_AGENT]"
+load_dotenv()
+AV_API_KEY = os.getenv("AV_API_KEY")
+TD_API_KEY = os.getenv("TD_API_KEY")
+SEC_USER_AGENT = os.getenv("SEC_USER_AGENT")
 
 def get_sec_company_facts(user_agent, ticker):
     map = pd.read_parquet('data/cik_map.parquet')
