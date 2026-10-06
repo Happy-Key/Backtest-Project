@@ -2,7 +2,7 @@ import pandas as pd
 import yfinance as yf
 import numpy as np
 import plotly.graph_objects as go
-from utils import get_market_data, read_parquet, format_data
+from utils import *
 import strategies
 import datetime
 
@@ -15,46 +15,65 @@ ann_borrow_rate = benchmark_rate + ann_borrow_premium
 ann_interest_rate = benchmark_rate - ann_interest_premium
 
 #specifics
-ticker_name = 'SPY'
-strategy_name = 'MA Crossover'
+ticker_name = 'short600'
+strategy_name = 'Basket'
 ann_actions = 252
 source_name = 'twelvedata'
 
 def main():
-    data = fetch_data()
+    data = fetch_data_from_list("lists/short600.txt")
+    #data = fetch_data()
+    data.sort_values(['ticker','timestamp'])
     (train, test) = train_test_split(data)
     data = train
-    
     df = add_log_return(data)
     match strategy_name:
+        case 'Buy and Hold':
+            df['signal'] = 1
         case 'MA Crossover':
-            df = strategies.MA_Crossover(df, 20, 100)
+            df['signal'] = strategies.MA_Crossover(df, 20, 200)
         case 'BBand':
-            df = strategies.Bollinger_Band(df, 10, 1)
-    
-    df['signal'] = df.signal.shift(1)
+            df['signal'] = strategies.Bollinger_Band(df, 200, 2.5)
+        case 'Combined':
+            df['signal1'] = strategies.MA_Crossover(df, 20, 200)
+            df['signal2'] = strategies.Bollinger_Band(df, 200, 2.5)
+            df['signal'] = np.clip(df.signal1 + df.signal2,-1,1)
+        case 'Basket':
+            fundamental = pd.read_parquet("data/gold/fundamental/wide.parquet")
+            fundamental['timestamp'] = pd.to_datetime(fundamental['datetime'])
+            df['signal'] = strategies.Momentum_Value_Basket(df, fundamental, 10, 20, 252)
+    df['signal'] = df.signal.fillna(0)
+    df['signal'] = df.groupby('ticker').signal.shift(1)
+    df = df.dropna()
+    df['total_signal'] = df.groupby('timestamp')['signal'].transform('sum')
+    df['signal'] = np.where(df.total_signal == 0, 0, df.signal / df.total_signal)
     df = add_fees(df, fixed_fee_rate)
     df = df.dropna()
-    df = analyze_results(df)
+    analysis = analyze_results(df)
     
-    print(f'Strategy ann-return: {df.strat_return.mean()*ann_actions}')
-    print(f'Strategy ann. sharpe: {ann_sharpe(df.strat_return, ann_actions)}')
-    print(f'Optimal leverage: {kelly_leverage(ann_actions*df.strat_return.mean(),ann_actions*df.strat_return.var())}')
-    print(f'Max drawdown: {100*(1-np.exp(df.drawdown.min()))}%')
-    print(f'Ann. return lost to fees: {df.fee.mean()*ann_actions}')
+    print(f'Strategy ann-return: {analysis.strat_return.mean()*ann_actions}')
+    print(f'Strategy ann. sharpe: {ann_sharpe(analysis.strat_return, ann_actions)}')
+    print(f'Optimal leverage: {kelly_leverage(ann_actions*analysis.strat_return.mean(),ann_actions*analysis.strat_return.var())}')
+    print(f'Max drawdown: {100*(1-np.exp(analysis.drawdown.min()))}%')
+    print(f'Ann. return lost to fees: {analysis.fee.mean()*ann_actions}')
 
     if input('Graph Data? (y/n)') == 'y':
-        graph_results(df, 'log-return', f'[{ticker_name}] {strategy_name} vs. Buy and Hold')
+        graph_results(analysis, 'log-return', f'[{ticker_name}] {strategy_name} vs. Buy and Hold')
 
 def analyze_results(df):
     df['strat_return'] = df.signal*df.log_return + df.fee
-    df['cum_return'] = (df.strat_return).cumsum()
-    df['market_cum_return'] = df.log_return.cumsum()
-    df['peak'] = df.cum_return.cummax()
-    df['drawdown'] = df.cum_return - df.peak
-    df['strat_equity'] = np.exp(df.cum_return)
-    df['market_equity'] = np.exp(df.log_return.cumsum())
-    return df
+    df['market_return'] = df.log_return
+    analysis = df[['timestamp']].drop_duplicates().sort_values('timestamp')
+    analysis = analysis.merge(df.groupby('timestamp')['strat_return'].sum(), on='timestamp')
+    analysis['cum_return'] = analysis.strat_return.cumsum()
+    analysis = analysis.merge(df.groupby('timestamp')['market_return'].mean(), on='timestamp')
+    analysis['market_cum_return'] = analysis.market_return.cumsum()
+    analysis['peak'] = analysis.cum_return.cummax()
+    analysis['drawdown'] = analysis.cum_return - analysis.peak
+    analysis['strat_equity'] = np.exp(analysis.cum_return)
+    analysis['market_equity'] = np.exp(analysis.market_cum_return)
+    analysis = analysis.merge(df.groupby('timestamp')['fee'].sum(), on='timestamp')
+    return analysis
 
 def add_fees(df, absoluteFee):
     df['feeLogReturn'] = np.log((df['unadjusted_close']-absoluteFee) / df['unadjusted_close']) 
@@ -68,11 +87,11 @@ def train_test_split(data, years=5):
     return (train, test)
 
 def add_log_return(df, num_returns=1):
-    df['prev_close'] = df['close'].shift(1)
+    df['prev_close'] = df.groupby('ticker')['close'].shift(1)
     df['log_return'] = np.log(df.close/df.prev_close)
     if num_returns > 1:
         for i in range(1, num_returns):
-            df['log_return_lag' + str(i)] = df.log_return.shift(i)
+            df['log_return_lag' + str(i)] = df.groupby('ticker').log_return.shift(i)
     return df
 
 def kelly_leverage(mean, var):
@@ -98,7 +117,29 @@ def fetch_data():
         "start_date": "2000-01-01",
         "end_date": datetime.date.today()
     }
-    return format_data(get_market_data(spec), source_name)
+    data = format_data(get_market_data(spec), source_name)
+    data['ticker'] = ticker_name
+    return data
+
+def fetch_data_from_list(list_path):
+    with open(list_path, "r", encoding="utf-8") as file:
+        ticker_list = str.split(file.read(),',')
+        accumulated_tickers = []
+        for ticker in ticker_list:
+            spec = {
+                    "source": source_name,
+                    "ticker": ticker,
+                    "series": "WEEKLY_ADJUSTED",
+                    "datatype": "csv",
+                    "start_date": "2000-01-01",
+                    "end_date": datetime.date.today()
+                }
+            temp = format_data(get_market_data(spec), source_name)
+            temp['ticker'] = ticker
+            accumulated_tickers.append(temp)
+        df = pd.concat(accumulated_tickers, ignore_index=True)
+        return df
+            
 
 def graph_results(df, graph_type, name):
     fig = go.Figure()

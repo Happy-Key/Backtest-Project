@@ -3,33 +3,69 @@ from utils import *
 def execute():
     df = pd.DataFrame(columns=['ticker','datetime'])
     df.to_parquet('data/gold/fundamental/wide.parquet')
-    
+    bulk_gold_update(add_EPS_to_gold, 'lists/tickers_S&P600.txt', 20)
     df = pd.read_parquet('data/gold/fundamental/wide.parquet')
-    df = add_EPS_to_gold(df, 'AAMI')
+    df = df.replace([np.inf, -np.inf], np.nan).dropna()
+    print(df['EPS'].mean())
+    print(df['EPS'].std())
+    print(df['EPS'].max())
+    df.to_parquet('data/gold/fundamental/wide.parquet')
+    read_parquet('gold/fundamental/wide')
+
+def bulk_gold_update(function, list_path, print_interval=100):
+    with open(list_path, "r", encoding="utf-8") as file:
+        ticker_list = str.split(file.read(),',')
+    df = pd.read_parquet('data/gold/fundamental/wide.parquet')
+    counter = 0
+    for ticker in ticker_list:
+        df = function(df, ticker)
+        counter += 1
+        if (counter % print_interval == 0):
+            print(ticker)
     df = df.dropna(subset=df.columns.difference(['ticker','datetime']), how='all')
     df.to_parquet('data/gold/fundamental/wide.parquet')
 
 def add_EPS_to_gold(gold, ticker):
     net_income_tags = {
-        "NetIncomeLoss": 1,
-        "ProfitLoss": 2,
-        "NetIncomeLossAvailableToCommonStockholdersBasic": 3,
+        "IncomeLossFromContinuingOperationsIncludingPortionAttributableToNoncontrollingInterest": 1,
+        "IncomeLossFromContinuingOperations": 2,
+        "NetIncomeLoss": 3,
+        "ProfitLoss": 4,
+        "NetIncomeLossAvailableToCommonStockholdersBasic": 5,
     }
-    gold = add_gold_data(gold,ticker,'UnifiedIncome',net_income_tags, True)
-    gold = add_gold_data(gold,ticker,'NumberOfShares',{'WeightedAverageNumberOfDilutedSharesOutstanding':1,
-                                                                     'WeightedAverageNumberOfSharesOutstandingDiluted':2 }, False)
-    gold = add_gold_data(gold,ticker,'PulledEPS',{'EarningsPerShareDiluted':1,
+    sel = gold[gold['ticker'] == ticker]
+    sel = add_gold_data_to_selection(sel,ticker,'UnifiedIncome',net_income_tags, True)
+    sel = add_gold_data_to_selection(sel,ticker,'NumberOfShares',{'WeightedAverageNumberOfDilutedSharesOutstanding':1,
+                                                                     'WeightedAverageNumberOfSharesOutstandingDiluted':2}, False)
+    sel = add_gold_data_to_selection(sel,ticker,'PulledEPS',{'EarningsPerShareDiluted':1,
                                                                  'EarningsPerShareBasicAndDiluted':2}, True)
-    gold['EPS'] = gold.UnifiedIncome / gold.NumberOfShares
-    gold['EPS_MAD'] = np.abs(gold.EPS - gold.PulledEPS)
-    #gold.to_csv('temp/test.csv')
+    med = sel['NumberOfShares'].median()
+    sel['NumberOfShares'] = np.where(
+        (sel.NumberOfShares/med).between(0.0001,0.01),
+        sel.NumberOfShares * 1000,
+        sel.NumberOfShares)
+    sel['NumberOfShares'] = np.where(
+        (sel.NumberOfShares/med).between(0.0000001,0.00001),
+        sel.NumberOfShares * 1000000,
+        sel.NumberOfShares)
+    sel['EPS'] = sel.UnifiedIncome / sel.NumberOfShares
+    sel['EPS'] = np.where(
+        (sel.EPS).between(100,10000),
+        sel.EPS / 1000,
+        sel.EPS)
+    sel['EPS_MAD'] = np.abs(sel.EPS - sel.PulledEPS)
+    #sel.to_csv('temp/test.csv')
     diff_tol = 1.0
-    if (gold.EPS_MAD.max() > diff_tol):
-        print(f'Maximum EPS deviation of {gold.EPS_MAD.max()} on {ticker} exceeds {diff_tol}')
+    #if (sel.EPS_MAD.max() > diff_tol):
+        #print(f'Maximum EPS deviation of {sel.EPS_MAD.max()} on {ticker} exceeds {diff_tol}')
         #if (input('Continue? (y/n)') != 'y'): raise RuntimeError('EPS Deviation too great, system stopped.')
-    return gold.drop(columns=['UnifiedIncome','NumberOfShares','PulledEPS','EPS_MAD'])
+    sel['EPS'] = np.where(sel.EPS_MAD>15,
+                          np.where(np.abs(sel.EPS)>np.abs(sel.PulledEPS),sel.PulledEPS,sel.EPS),
+                          sel.EPS)
+    sel = sel.drop(columns=['UnifiedIncome','NumberOfShares','PulledEPS','EPS_MAD'])
+    return pd.concat([gold[gold['ticker'] != ticker], sel], axis=0, join='outer', ignore_index=False, keys=None)
 
-def add_gold_data(gold_df, ticker, final_tag_name, valid_tag_hierarchy, isInterval):
+def add_gold_data_to_selection(gold_df, ticker, final_tag_name, valid_tag_hierarchy, isInterval):
     filename = f'data/silver/SEC/{ticker}_long.parquet'
     if os.path.exists(filename):
         data = pd.read_parquet(filename)
@@ -43,7 +79,6 @@ def add_gold_data(gold_df, ticker, final_tag_name, valid_tag_hierarchy, isInterv
     gold_col = ttm(data[['start','end','val','filed']]) if isInterval else smart_select(data[['end','val','filed']])
     gold_col['ticker'] = ticker
     gold_col.rename(columns={'val':final_tag_name}, inplace=True)
-    print(gold_col)
     if gold_df[gold_df['ticker'] == ticker].empty:
         return pd.concat([gold_df, gold_col], axis=0, join='outer', ignore_index=False, keys=None)
     return gold_df.merge(gold_col, on=['ticker','datetime'], how='outer')
@@ -134,4 +169,4 @@ def facts_to_long_by_list(list_path):
             continue
         sec_facts_to_long(ticker)
 
-execute()
+#execute()
